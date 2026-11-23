@@ -1,0 +1,76 @@
+# Spellful Capacitor 8 / React Vite build, based on the uploaded Spellful 6.zip.
+# IMPORTANT: GitHub repository root must contain this file, package.json, src/, and public/.
+# No macOS computer is required locally; Codemagic runs Xcode in the cloud.
+workflows:
+  ios-test:
+    name: Spellful iOS - Unsigned Simulator Test
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+    environment:
+      node: 22
+      xcode: latest
+    scripts:
+      - name: Install dependencies (resolve stale lockfile without modifying repository)
+        script: |
+          npm install --no-audit --no-fund --package-lock=false
+      - name: Build existing Spellful React website assets
+        script: |
+          npm run mobile:build
+          npm run mobile:check
+      - name: Generate Capacitor iOS project
+        script: |
+          if [ ! -d ios/App/App.xcodeproj ]; then
+            npx cap add ios
+          fi
+          npx cap sync ios
+          bash scripts/apply-ios-branding.sh
+          test -d ios/App/App.xcodeproj
+      - name: Compile unsigned iOS simulator app
+        script: |
+          set -o pipefail
+          xcodebuild -project ios/App/App.xcodeproj \
+            -scheme App -configuration Debug -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build
+    artifacts:
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/Products/**/*.app
+      - /tmp/xcodebuild_logs/*.log
+
+  ios-release:
+    name: Spellful iOS - App Store IPA (Apple signing required)
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+    # In Codemagic, add an App Store Connect integration named spellful_apple first.
+    integrations:
+      app_store_connect: spellful_apple
+    environment:
+      node: 22
+      xcode: latest
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.spellful.app
+    scripts:
+      - name: Install dependencies and build web assets
+        script: |
+          npm install --no-audit --no-fund --package-lock=false
+          npm run mobile:build
+          npm run mobile:check
+      - name: Create and synchronize iOS project
+        script: |
+          if [ ! -d ios/App/App.xcodeproj ]; then
+            npx cap add ios
+          fi
+          npx cap sync ios
+          bash scripts/apply-ios-branding.sh
+      - name: Configure Apple signing profiles
+        script: |
+          xcode-project use-profiles
+      - name: Build signed App Store IPA
+        script: |
+          xcode-project build-ipa --project ios/App/App.xcodeproj --scheme App
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - $CM_BUILD_DIR/**/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    # Upload to TestFlight/App Store Connect manually after reviewing the signed IPA.
+    # No automated publication is enabled.
